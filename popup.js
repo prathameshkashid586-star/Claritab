@@ -218,13 +218,15 @@ async function autoAssignTabToGroup(tab) {
 
     const prompt = 'Given these tab groups:\n' + groupNames + '\n\nWhich group best fits this new tab? Title: ' + (tab.title || 'Untitled') + ' URL: ' + (tab.url || '') + '\n\nRespond with ONLY the group index number (0, 1, 2...) or the word none if no match. Single word only.';;
 
-    const data = await callAPI(result.apiKey, prompt, 10);
+    const data = await callAPI(result.apiKey, prompt, 50);
     const response = (data.content?.[0]?.text || '').trim().toLowerCase();
 
     // Parse response — expect a number or "none"
+    // Extract first number found in response to handle extra text from AI
     if (response === 'none' || response === '') return;
-
-    const groupIdx = parseInt(response);
+    const numMatch = response.match(/\d+/);
+    if (!numMatch) return;
+    const groupIdx = parseInt(numMatch[0]);
     if (isNaN(groupIdx) || groupIdx < 0 || groupIdx >= savedGroups.length) return;
 
     // Add tab to the matched group
@@ -247,6 +249,7 @@ async function autoAssignTabToGroup(tab) {
 
     // Show subtle toast notification
     showToast('✦ Added to "' + savedGroups[groupIdx].name + '"');
+    console.log('[Claritab] Auto-assigned "' + tab.title + '" to group "' + savedGroups[groupIdx].name + '"');
 
   } catch(e) {
     // Fail silently — this is a background operation
@@ -502,6 +505,17 @@ function positionMenu(menu, anchor) {
 }
 
 function renderGroups() {
+  // Always reload from storage first — catches any auto-assigns
+  // that happened while the popup was closed
+  chrome.storage.sync.get(['savedGroups'], function(syncResult) {
+    if (!chrome.runtime.lastError && syncResult.savedGroups) {
+      savedGroups = syncResult.savedGroups;
+    }
+    _renderGroupsUI();
+  });
+}
+
+function _renderGroupsUI() {
   groupsContainer.innerHTML='';
   if (savedGroups.length===0) { groupsEmpty.style.display='flex'; return; }
   groupsEmpty.style.display='none';
