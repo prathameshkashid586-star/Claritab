@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Claritab</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="popup.css"/>
+</head>
+<body>
+
+  <!-- ===== ONBOARDING OVERLAY ===== -->
+  <div id="onboarding" style="display:none;">
+    <div class="ob-header">
+      <div class="logo"><span class="logo-icon">⬡</span><span class="logo-text">Claritab</span></div>
+      <button class="ob-skip" id="obSkip">Skip</button>
+    </div>
+    <div class="ob-body">
+      <div class="ob-dots">
+        <div class="ob-dot active" id="obDot0"></div>
+        <div class="ob-dot" id="obDot1"></div>
+        <div class="ob-dot" id="obDot2"></div>
+      </div>
+
+      <!-- Step 1 -->
+      <div class="ob-step" id="obStep0">
+        <div class="ob-icon icon-blue">⬡</div>
+        <div class="ob-title">Welcome to Claritab</div>
+        <div class="ob-desc">Your AI-powered tab manager. Research smarter, stay organised, get more done.</div>
+        <div class="ob-features">
+          <div class="ob-feat"><span class="ob-feat-icon">✦</span><span>AI summaries for any tab</span></div>
+          <div class="ob-feat"><span class="ob-feat-icon">⬡</span><span>Smart grouping by topic</span></div>
+          <div class="ob-feat"><span class="ob-feat-icon">⚖</span><span>Research quality comparator</span></div>
+          <div class="ob-feat"><span class="ob-feat-icon">◎</span><span>Focus mode — remove distractions</span></div>
+          <div class="ob-feat"><span class="ob-feat-icon">💾</span><span>Save &amp; restore tab sessions</span></div>
+          <div class="ob-feat"><span class="ob-feat-icon">♥</span><span>Tab health score</span></div>
+        </div>
+        <button class="btn-primary" id="obStep0Btn">Get Started →</button>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="ob-step" id="obStep1" style="display:none;">
+        <div class="ob-icon icon-purple">🔑</div>
+        <div class="ob-title">Add your Claude API key</div>
+        <div class="ob-desc">Powers AI summaries, smart grouping &amp; research comparison. Free to get.</div>
+        <div class="ob-api-box">
+          <div class="provider-tabs" style="margin-bottom:8px;">
+            <button class="provider-tab active" id="obProvClaude" data-provider="claude">Claude</button>
+            <button class="provider-tab" id="obProvGemini" data-provider="gemini">Gemini</button>
+            <button class="provider-tab" id="obProvOpenAI" data-provider="openai">GPT</button>
+            <button class="provider-tab" id="obProvGroq" data-provider="groq">Groq</button>
+          </div>
+          <div class="provider-info" id="obProviderInfo"></div>
+          <input type="password" id="obApiInput" class="api-key-input" placeholder="Paste your API key..."/>
+          <div class="ob-api-hint" id="obApiHint">Get yours free at <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a></div>
+          <div class="api-status" id="obApiStatus"></div>
+        </div>
+        <button class="btn-primary" id="obSaveKey">Save &amp; Continue →</button>
+        <button class="btn-secondary" id="obSkipKey" style="width:100%;margin-top:6px;">Skip — use basic features</button>
+      </div>
+
+      <!-- Step 3 -->
+      <div class="ob-step" id="obStep2" style="display:none;">
+        <div class="ob-icon icon-green">🎉</div>
+        <div class="ob-title">You're all set!</div>
+        <div class="ob-desc">Claritab is ready. Here's how to get the most out of it:</div>
+        <div class="ob-features">
+          <div class="ob-feat"><span class="ob-feat-icon">1</span><span>Open tabs you want to research</span></div>
+          <div class="ob-feat"><span class="ob-feat-icon">2</span><span>Go to Smart Groups → Auto-Group</span></div>
+          <div class="ob-feat"><span class="ob-feat-icon">3</span><span>Click ⚖ Compare for Research</span></div>
+        </div>
+        <div class="ob-success" id="obSuccess" style="display:none;">
+          <span class="ob-success-dot"></span>
+          <span>API key saved successfully</span>
+        </div>
+        <button class="btn-primary" id="obFinishBtn">Start Using Claritab →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== MAIN APP ===== -->
+  <div class="app" id="mainApp" style="display:none;">
+
+    <div class="header">
+      <div class="logo"><span class="logo-icon">⬡</span><span class="logo-text">Claritab</span></div>
+      <div class="header-right">
+        <div class="tab-count-badge" id="tabCount">0 tabs</div>
+        <button class="settings-btn" id="settingsBtn" title="Settings">⚙</button>
+      </div>
+    </div>
+
+    <div class="api-panel" id="apiPanel" style="display:none;">
+      <div class="api-panel-title">🔑 AI Provider</div>
+      <p class="api-panel-desc">Choose your AI provider and paste your API key.</p>
+
+      <!-- Provider selector -->
+      <div class="provider-tabs">
+        <button class="provider-tab active" id="provClaude" data-provider="claude">Claude</button>
+        <button class="provider-tab" id="provGemini" data-provider="gemini">Gemini</button>
+        <button class="provider-tab" id="provOpenAI" data-provider="openai">GPT</button>
+        <button class="provider-tab" id="provGroq" data-provider="groq">Groq</button>
+      </div>
+
+      <!-- Provider info -->
+      <div class="provider-info" id="providerInfo"></div>
+
+      <!-- Key input -->
+      <div class="api-input-row">
+        <input type="password" id="apiKeyInput" class="api-key-input" placeholder="Paste your API key..."/>
+        <button class="api-save-btn" id="saveApiKey">Save</button>
+      </div>
+      <div class="api-status" id="apiStatus"></div>
+    </div>
+
+    <!-- Tab Bar -->
+    <div class="tab-bar">
+      <button class="tab-bar-btn active" id="btnAll">Tabs</button>
+      <button class="tab-bar-btn" id="btnGroups">⬡ Groups</button>
+      <button class="tab-bar-btn" id="btnFocus">◎ Focus</button>
+      <button class="tab-bar-btn" id="btnSessions">💾 Sessions</button>
+      <button class="tab-bar-btn" id="btnHealth">♥ Health</button>
+    </div>
+
+    <!-- Search -->
+    <div class="search-wrap" id="searchWrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" id="searchInput" class="search-input" placeholder="Search tabs..." autocomplete="off"/>
+      <span class="clear-search" id="clearSearch">✕</span>
+    </div>
+
+    <!-- ALL TABS -->
+    <div id="viewAll">
+      <div class="tab-list" id="tabList"></div>
+      <div class="empty-state" id="emptyState" style="display:none;"><div class="empty-icon">◎</div><p>No tabs found</p></div>
+    </div>
+
+    <!-- SMART GROUPS -->
+    <div id="viewGroups" style="display:none;">
+      <div class="groups-toolbar">
+        <button class="btn-primary" id="btnAutoGroup">✦ AI Auto-Group</button>
+        <button class="btn-secondary" id="btnManualGroup">+ Manual</button>
+        <button class="btn-secondary" id="btnClearGroups">Clear</button>
+      </div>
+
+      <!-- Manual group selection panel -->
+      <div class="manual-panel" id="manualPanel" style="display:none;">
+        <div class="manual-panel-title">Select tabs to group</div>
+        <div class="manual-tab-list" id="manualTabList"></div>
+        <div class="manual-footer">
+          <span id="manualCount">0 selected</span>
+          <div style="display:flex;gap:6px;">
+            <button class="btn-secondary" id="btnManualCancel">Cancel</button>
+            <button class="btn-primary" id="btnManualCreate" disabled>Create Group</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Name dialog -->
+      <div class="name-dialog" id="nameDialog" style="display:none;">
+        <div class="name-dialog-title">Name your group</div>
+        <input type="text" id="groupNameInput" class="api-key-input" placeholder="e.g. Research, Work, Shopping..."/>
+        <div class="name-dialog-btns">
+          <button class="btn-primary" id="btnConfirmGroup">Create Group</button>
+          <button class="btn-secondary" id="btnAiName">✦ AI Suggest Name</button>
+          <button class="btn-secondary" id="btnCancelName">Cancel</button>
+        </div>
+        <div class="api-status" id="nameStatus"></div>
+      </div>
+
+      <div id="groupsContainer"></div>
+      <div class="empty-state" id="groupsEmpty" style="display:none;"><div class="empty-icon">⬡</div><p>AI Auto-Group or create one manually</p></div>
+    </div>
+
+    <!-- FOCUS -->
+    <div id="viewFocus" style="display:none;">
+      <div class="focus-header" id="focusHeader">
+        <div class="focus-title">Select tabs to keep</div>
+        <div class="focus-desc">Check tabs to focus on. All others will be hidden.</div>
+      </div>
+      <div class="focus-active-bar" id="focusActiveBar" style="display:none;">
+        <span class="focus-active-label">🎯 Focus mode active</span>
+        <button class="btn-exit-focus" id="btnExitFocus">Exit Focus</button>
+      </div>
+      <div class="tab-list" id="focusList"></div>
+      <div class="focus-footer" id="focusFooter">
+        <span id="focusCount">0 tabs selected</span>
+        <button class="btn-primary" id="btnActivateFocus">Activate Focus</button>
+      </div>
+    </div>
+
+    <!-- SESSIONS -->
+    <div id="viewSessions" style="display:none;">
+      <div class="sessions-toolbar">
+        <button class="btn-primary" id="btnSaveSession">💾 Save Current Session</button>
+        <button class="btn-secondary" id="btnExportSessions">Export</button>
+        <button class="btn-secondary" id="btnImportSessions">Import</button>
+        <input type="file" id="importFileInput" accept=".json" style="display:none;"/>
+      </div>
+      <div class="api-status" id="importStatus" style="margin-bottom:4px;"></div>
+      <!-- Save dialog -->
+      <div class="save-dialog" id="saveDialog" style="display:none;">
+        <div class="save-dialog-title">Name this session</div>
+        <input type="text" id="sessionNameInput" class="api-key-input" placeholder="e.g. Research — Climate Change"/>
+        <div class="session-tab-count" id="sessionTabCount"></div>
+        <div class="save-dialog-btns">
+          <button class="btn-primary" id="btnConfirmSave">Save Session</button>
+          <button class="btn-secondary" id="btnCancelSave">Cancel</button>
+        </div>
+      </div>
+      <div id="sessionsList"></div>
+      <div class="empty-state" id="sessionsEmpty" style="display:none;"><div class="empty-icon">💾</div><p>No saved sessions yet</p></div>
+    </div>
+
+    <!-- HEALTH -->
+    <div id="viewHealth" style="display:none;">
+      <div class="health-score-ring">
+        <div class="ring-wrap">
+          <svg width="72" height="72" viewBox="0 0 72 72">
+            <circle cx="36" cy="36" r="28" fill="none" stroke="#262d3f" stroke-width="7"/>
+            <circle id="healthRingFill" cx="36" cy="36" r="28" fill="none" stroke="#f59e0b" stroke-width="7"
+              stroke-dasharray="176" stroke-dashoffset="176" stroke-linecap="round"
+              transform="rotate(-90 36 36)"/>
+          </svg>
+          <div class="ring-center">
+            <div class="ring-num" id="healthScoreNum">—</div>
+            <div class="ring-lbl">/ 100</div>
+          </div>
+        </div>
+        <div class="health-info">
+          <div class="health-title" id="healthTitle">Calculating...</div>
+          <div class="health-sub" id="healthSub">Analysing your tabs</div>
+        </div>
+      </div>
+      <div class="stats-row">
+        <div class="stat-card"><div class="stat-num num-red" id="statDupes">—</div><div class="stat-lbl">Duplicates</div></div>
+        <div class="stat-card"><div class="stat-num num-yellow" id="statOld">—</div><div class="stat-lbl">Old tabs</div></div>
+        <div class="stat-card"><div class="stat-num num-muted" id="statTotal">—</div><div class="stat-lbl">Total tabs</div></div>
+      </div>
+      <div class="section-label">Issues</div>
+      <div id="healthIssues"></div>
+      <button class="btn-primary" id="btnFixAll" style="width:100%;margin-top:4px;">✦ Fix all issues automatically</button>
+    </div>
+
+    <div class="footer">
+      <span id="filteredCount"></span>
+      <span class="shortcut-hint" id="shortcutHint"></span>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
