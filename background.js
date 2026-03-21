@@ -143,13 +143,18 @@ async function migrateToSync() {
 function getFromStorage(key) {
   return new Promise((resolve) => {
     chrome.storage.sync.get([key], (syncResult) => {
-      if (chrome.runtime.lastError || !syncResult[key]) {
-        // Fall back to local storage
+      // Only fall back to local on actual error — not when key simply doesn't exist yet
+      if (chrome.runtime.lastError) {
         chrome.storage.local.get([key], (localResult) => {
           resolve(localResult);
         });
-      } else {
+      } else if (syncResult[key] !== undefined) {
         resolve(syncResult);
+      } else {
+        // Key not in sync — check local (could have data from before migration)
+        chrome.storage.local.get([key], (localResult) => {
+          resolve(localResult);
+        });
       }
     });
   });
@@ -208,7 +213,8 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
   }
 
   if (provider === 'gemini') {
-    const models = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+    // Model list — all verified available on v1beta generateContent endpoint
+    const models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite'];
     let lastError = null;
     for (const model of models) {
       try {
@@ -266,7 +272,7 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: 'llama3-8b-8192',
+        model: 'llama-3.1-8b-instant',
         max_tokens: maxTokens,
         messages: [{ role: 'user', content: prompt }]
       })

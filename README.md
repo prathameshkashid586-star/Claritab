@@ -4,7 +4,7 @@
 
 ### AI-powered Chrome Extension for smarter tab management and research
 
-![Version](https://img.shields.io/badge/version-4.0-5b8fff?style=flat-square)
+![Version](https://img.shields.io/badge/version-4.0.0-5b8fff?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-4ade80?style=flat-square)
 ![Chrome](https://img.shields.io/badge/Chrome-Extension-f59e0b?style=flat-square)
 ![AI](https://img.shields.io/badge/AI-Claude%20%7C%20Gemini%20%7C%20GPT%20%7C%20Groq-a78bfa?style=flat-square)
@@ -42,7 +42,7 @@ It reads your tabs, groups them by topic, scores them for research quality, and 
 - **Live Tab Sync** — tab list updates in real time as tabs open, close or change
 - **Manual Grouping** — select tabs with checkboxes, create custom groups
 - **Edit Groups** — rename groups, move tabs between groups, delete tabs
-- **Keyboard Shortcuts** — `Ctrl+F` search, `Ctrl+G` groups, `Ctrl+S` sessions, `Ctrl+H` health, `Esc` close panels
+- **Keyboard Shortcuts** — `Ctrl+F` search, `Ctrl+G` groups, `Ctrl+Shift+S` sessions, `Ctrl+H` health, `Esc` close panels
 
 ### 🎯 Productivity
 - **Focus Mode** — select tabs to focus on, all others get dimmed visually with FOCUS/OTHER badges

@@ -1,4 +1,5 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html{background:#0d0f14;}
 :root{
   --bg:#0d0f14;--surface:#161a23;--card:#1c2130;--border:#262d3f;
   --accent:#5b8fff;--accent2:#a78bfa;--danger:#ff5e7a;--success:#4ade80;--warning:#f59e0b;

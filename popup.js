@@ -68,9 +68,11 @@ const PROVIDERS = {
     desc: 'Most popular AI. $5 free credits for new accounts.',
     link: 'https://platform.openai.com',
     linkText: 'platform.openai.com',
-    placeholder: 'sk-...',
+    placeholder: 'sk-proj-...',
     badge: 'paid',
-    validate: k => k.startsWith('sk-')
+    // New OpenAI keys start with sk-proj-, legacy keys start with sk-
+    // Require minimum length to reject obviously invalid short strings
+    validate: k => (k.startsWith('sk-proj-') || (k.startsWith('sk-') && !k.startsWith('sk-ant-'))) && k.length > 20
   },
   groq: {
     name: 'Groq',
@@ -97,40 +99,79 @@ const SESSION_COLORS = ['#5b8fff','#a78bfa','#4ade80','#f59e0b','#f472b6','#22d3
 // =============================================
 //  BOOT
 // =============================================
-// Load API key + onboarding from local (sensitive/personal)
-chrome.storage.local.get(['onboardingDone','apiKey','selectedProvider','focusModeActive','hiddenTabIds','hiddenWindowId'], function(r) {
-  if (r.selectedProvider) { selectedProvider = r.selectedProvider; obSelectedProvider = r.selectedProvider; }
-  if (r.apiKey) { apiKeyInput.value = r.apiKey; apiStatus.textContent='✓ API key saved'; apiStatus.className='api-status success'; }
-  // Init provider UI after loading
-  setTimeout(() => { initProviderUI(); initObProviderUI(); }, 100);
-  if (r.focusModeActive){ focusModeActive=true; hiddenTabIds=r.hiddenTabIds||[]; }
-  if (!r.onboardingDone) {
-    onboarding.style.display = 'flex';
-    mainApp.style.display    = 'none';
-  } else {
-    onboarding.style.display = 'none';
-    mainApp.style.display    = 'flex';
-  }
-});
+// =============================================
+//  BOOT — sequential reads to avoid race conditions
+//  Step 1: local prefs → Step 2: sync data → Step 3: tabs
+// =============================================
+function bootSequential() {
+  // Step 1: Load local prefs (API key, onboarding, focus state)
+  chrome.storage.local.get(
+    ['onboardingDone','apiKey','selectedProvider','focusModeActive','hiddenTabIds','hiddenWindowId'],
+    function(r) {
+      if (r.selectedProvider) { selectedProvider = r.selectedProvider; obSelectedProvider = r.selectedProvider; }
+      if (r.apiKey) { apiKeyInput.value = r.apiKey; apiStatus.textContent='✓ API key saved'; apiStatus.className='api-status success'; }
 
-// Load sessions + groups from sync (synced across devices), fall back to local
-chrome.storage.sync.get(['savedGroups','savedSessions'], function(syncResult) {
-  if (chrome.runtime.lastError || (!syncResult.savedGroups && !syncResult.savedSessions)) {
+      // Validate focus state — only restore if both flag AND IDs are present
+      if (r.focusModeActive && r.hiddenTabIds && r.hiddenTabIds.length > 0) {
+        focusModeActive = true;
+        hiddenTabIds = r.hiddenTabIds;
+      } else {
+        // Clean up any inconsistent state left by an interrupted popup close
+        focusModeActive = false;
+        chrome.storage.local.set({ focusModeActive: false, hiddenTabIds: [] });
+      }
+
+      // Show correct screen
+      if (!r.onboardingDone) {
+        onboarding.style.display = 'flex';
+        mainApp.style.display    = 'none';
+      } else {
+        onboarding.style.display = 'none';
+        mainApp.style.display    = 'flex';
+      }
+
+      // Init provider UI after local prefs are loaded
+      setTimeout(() => { initProviderUI(); initObProviderUI(); }, 0);
+
+      // Step 2: Load synced data (groups + sessions) after local is ready
+      bootLoadSyncedData();
+    }
+  );
+}
+
+function bootLoadSyncedData() {
+  chrome.storage.sync.get(['savedGroups','savedSessions'], function(syncResult) {
+    // Capture lastError immediately — it gets overwritten the moment
+    // any subsequent chrome API call is made (including the local.get below)
+    const syncError = chrome.runtime.lastError || null;
+    const hasSyncGroups   = !syncError && syncResult.savedGroups   && syncResult.savedGroups.length   > 0;
+    const hasSyncSessions = !syncError && syncResult.savedSessions && syncResult.savedSessions.length > 0;
+
+    // Load local to compare/merge
     chrome.storage.local.get(['savedGroups','savedSessions'], function(localResult) {
-      if (localResult.savedGroups)  savedGroups  = localResult.savedGroups;
-      if (localResult.savedSessions) savedSessions = localResult.savedSessions;
-    });
-  } else {
-    if (syncResult.savedGroups)  savedGroups  = syncResult.savedGroups;
-    if (syncResult.savedSessions) savedSessions = syncResult.savedSessions;
-  }
-});
+      // Groups: use whichever has more (local is most recent write)
+      const localGroups  = localResult.savedGroups  || [];
+      const syncGroups   = hasSyncGroups ? syncResult.savedGroups : [];
+      savedGroups = localGroups.length >= syncGroups.length ? localGroups : syncGroups;
 
-chrome.tabs.query({}, function(tabs) {
-  allTabs = tabs;
-  updateTabCountBadge(tabs.length);
-  renderTabs(tabs);
-});
+      // Sessions: merge local + sync, deduplicate by name+savedAt
+      const localSessions = localResult.savedSessions || [];
+      const syncSessions  = hasSyncSessions ? syncResult.savedSessions : [];
+      const seen = new Set(localSessions.map(s => s.name + '_' + s.savedAt));
+      const uniqueSync = syncSessions.filter(s => !seen.has(s.name + '_' + s.savedAt));
+      savedSessions = [...localSessions, ...uniqueSync];
+
+      // Step 3: Query tabs only after all data is ready
+      chrome.tabs.query({}, function(tabs) {
+        allTabs = tabs;
+        updateTabCountBadge(tabs.length);
+        renderTabs(tabs);
+      });
+    });
+  });
+}
+
+bootSequential();
 
 // =============================================
 //  CENTRAL SYNC SYSTEM
@@ -175,34 +216,37 @@ chrome.tabs.onRemoved.addListener(function(tabId) {
   syncCurrentView();
 });
 
-// Tab created — sync ALL features + AI auto-group
+// Tab created — sync ALL features
 chrome.tabs.onCreated.addListener(function(tab) {
   allTabs.push(tab);
   updateTabCountBadge(allTabs.length);
-  // Only re-render the tabs view immediately — groups view is synced
-  // after the tab fully loads via onUpdated (tab has no title/url yet)
-  if (getActiveView() === 'viewAll') renderTabs(allTabs);
+  // Render current view immediately (tab has no title/url yet — onUpdated will fill it in)
+  syncCurrentView();
 
-  // AI auto-assign to existing group if groups exist
+  // AI auto-assign to existing group — wait for tab to fully load
+  // NOTE: This runs in popup.js but popup may close before the interval fires.
+  // Auto-assign in background.js would be more reliable for persistent operation.
   if (savedGroups.length > 0) {
-    // Wait for tab to load fully before assigning
     const checkReady = setInterval(function() {
       chrome.tabs.get(tab.id, function(updatedTab) {
         if (chrome.runtime.lastError) {
           clearInterval(checkReady);
           return;
         }
-        // Wait until tab has a real title and URL
         if (updatedTab.status === 'complete' && updatedTab.title && updatedTab.url &&
             !updatedTab.url.startsWith('chrome://') &&
             updatedTab.url !== 'about:newtab' &&
             updatedTab.title !== 'New Tab') {
           clearInterval(checkReady);
+          // Update allTabs with the fully loaded tab data
+          const idx = allTabs.findIndex(t => t.id === updatedTab.id);
+          if (idx !== -1) allTabs[idx] = updatedTab;
           autoAssignTabToGroup(updatedTab);
+          // Re-sync all views now that the tab has real data
+          syncCurrentView();
         }
       });
     }, 1000);
-
     // Stop checking after 15 seconds
     setTimeout(() => clearInterval(checkReady), 15000);
   }
@@ -216,17 +260,17 @@ async function autoAssignTabToGroup(tab) {
 
     const groupNames = savedGroups.map((g, i) => i + ': ' + g.name + ' (' + g.tabs.slice(0,3).map(t => t.title || cleanUrl(t.url||'')).join(', ') + ')').join('\n');
 
-    const prompt = 'Given these tab groups:\n' + groupNames + '\n\nWhich group best fits this new tab? Title: ' + (tab.title || 'Untitled') + ' URL: ' + (tab.url || '') + '\n\nRespond with ONLY the group index number (0, 1, 2...) or the word none if no match. Single word only.';;
+    const prompt = 'Given these tab groups:\n' + groupNames + '\n\nWhich group best fits this new tab? Title: ' + (tab.title || 'Untitled') + ' URL: ' + (tab.url || '') + '\n\nRespond with ONLY the group index number (0, 1, 2...) or the word none if no match. Single word only.';
 
+    // 50 tokens is enough for a single number or "none" — 10 was too tight and caused truncation
     const data = await callAPI(result.apiKey, prompt, 50);
-    const response = (data.content?.[0]?.text || '').trim().toLowerCase();
+    const raw = data.content?.[0]?.text || '';
+    const response = raw.trim().toLowerCase().replace(/[^0-9a-z]/gi, '');
 
     // Parse response — expect a number or "none"
-    // Extract first number found in response to handle extra text from AI
     if (response === 'none' || response === '') return;
-    const numMatch = response.match(/\d+/);
-    if (!numMatch) return;
-    const groupIdx = parseInt(numMatch[0]);
+
+    const groupIdx = parseInt(response);
     if (isNaN(groupIdx) || groupIdx < 0 || groupIdx >= savedGroups.length) return;
 
     // Add tab to the matched group
@@ -249,7 +293,6 @@ async function autoAssignTabToGroup(tab) {
 
     // Show subtle toast notification
     showToast('✦ Added to "' + savedGroups[groupIdx].name + '"');
-    console.log('[Claritab] Auto-assigned "' + tab.title + '" to group "' + savedGroups[groupIdx].name + '"');
 
   } catch(e) {
     // Fail silently — this is a background operation
@@ -277,27 +320,50 @@ function showToast(message) {
   }, 3000);
 }
 
-// Tab updated (URL change, title change) — sync ALL features  
+// Throttle helper — prevents storage being hammered when many tabs load at once
+let _groupSaveTimer = null;
+function throttledSaveGroups() {
+  if (_groupSaveTimer) clearTimeout(_groupSaveTimer);
+  _groupSaveTimer = setTimeout(() => {
+    saveToStorage({ savedGroups });
+    _groupSaveTimer = null;
+  }, 400);
+}
+
+// Tab updated (URL change, title change) — sync ALL features
 chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
   if (changeInfo.status === 'complete' || changeInfo.title) {
-    // Update tab in allTabs
+    // Update tab in allTabs — only merge defined fields to avoid overwriting
+    // good existing data with undefined values from a partial changeInfo object
     const idx = allTabs.findIndex(t => t.id === tabId);
     if (idx !== -1) {
-      allTabs[idx] = { ...allTabs[idx], ...tab };
+      const updated = { ...allTabs[idx] };
+      if (tab.title      !== undefined) updated.title      = tab.title;
+      if (tab.url        !== undefined) updated.url        = tab.url;
+      if (tab.favIconUrl !== undefined) updated.favIconUrl = tab.favIconUrl;
+      if (tab.status     !== undefined) updated.status     = tab.status;
+      if (tab.audible    !== undefined) updated.audible    = tab.audible;
+      if (tab.pinned     !== undefined) updated.pinned     = tab.pinned;
+      allTabs[idx] = updated;
     }
-    // Update tab in groups
+    // Update tab in groups — throttled to avoid 20 writes when all tabs load at once
     let groupsChanged = false;
     savedGroups = savedGroups.map(g => {
       g.tabs = g.tabs.map(t => {
         if (t.id === tabId) {
           groupsChanged = true;
-          return { ...t, title: tab.title || t.title, url: tab.url || t.url, favIconUrl: tab.favIconUrl || t.favIconUrl };
+          return {
+            ...t,
+            ...(tab.title      !== undefined && { title:      tab.title }),
+            ...(tab.url        !== undefined && { url:        tab.url }),
+            ...(tab.favIconUrl !== undefined && { favIconUrl: tab.favIconUrl })
+          };
         }
         return t;
       });
       return g;
     });
-    if (groupsChanged) saveToStorage({ savedGroups });
+    if (groupsChanged) throttledSaveGroups();
     syncCurrentView();
   }
 });
@@ -309,6 +375,34 @@ chrome.tabs.onActivated.addListener(function(activeInfo) {
     active: t.id === activeInfo.tabId
   }));
   if (getActiveView() === 'viewAll') renderTabs(allTabs);
+});
+
+// Tab moved between windows — update windowId in allTabs
+chrome.tabs.onAttached.addListener(function(tabId, attachInfo) {
+  const idx = allTabs.findIndex(t => t.id === tabId);
+  if (idx !== -1) {
+    allTabs[idx] = { ...allTabs[idx], windowId: attachInfo.newWindowId, index: attachInfo.newPosition };
+  }
+  syncCurrentView();
+});
+
+// Tab replaced (prerendering) — swap old ID for new ID
+chrome.tabs.onReplaced.addListener(function(addedTabId, removedTabId) {
+  const idx = allTabs.findIndex(t => t.id === removedTabId);
+  if (idx !== -1) {
+    allTabs[idx] = { ...allTabs[idx], id: addedTabId };
+  }
+  // Also update any groups that referenced the old ID
+  let groupsChanged = false;
+  savedGroups = savedGroups.map(g => {
+    g.tabs = g.tabs.map(t => {
+      if (t.id === removedTabId) { groupsChanged = true; return { ...t, id: addedTabId }; }
+      return t;
+    });
+    return g;
+  });
+  if (groupsChanged) saveToStorage({ savedGroups });
+  syncCurrentView();
 });
 
 // =============================================
@@ -326,13 +420,13 @@ function obNext() {
   if (next) { next.style.display = 'flex'; next.style.flexDirection = 'column'; next.style.alignItems = 'center'; }
   const nextDot = document.getElementById('obDot' + obCurrentStep);
   if (nextDot) nextDot.classList.add('active');
-};
+}
 
 function finishOnboarding() {
   chrome.storage.local.set({ onboardingDone: true });
   onboarding.style.display = 'none';
   mainApp.style.display = 'flex';
-};
+}
 
 document.getElementById('obSkip').addEventListener('click', finishOnboarding);
 document.getElementById('obStep0Btn').addEventListener('click', obNext);
@@ -394,7 +488,12 @@ saveApiKey.addEventListener('click', function() {
 // =============================================
 function renderTabs(tabs, query='') {
   tabList.innerHTML='';
-  if (tabs.length===0) { emptyState.style.display='flex'; filteredCount.textContent=''; return; }
+  if (tabs.length===0) {
+    emptyState.style.display='flex';
+    // Show "0 of N match" when searching — don't leave count blank
+    filteredCount.textContent = query ? `0 of ${allTabs.length} match` : '';
+    return;
+  }
   emptyState.style.display='none';
   filteredCount.textContent = query ? `${tabs.length} of ${allTabs.length} match` : '';
   tabs.forEach((tab,i) => tabList.appendChild(createTabCard(tab,query,i)));
@@ -504,14 +603,38 @@ function positionMenu(menu, anchor) {
   menu.style.left = left + 'px';
 }
 
+// Track when groups were last written in-memory so renderGroups can skip storage
+// reads when the in-memory copy is already current
+let _savedGroupsWrittenAt = 0;
+const GROUPS_CACHE_TTL_MS = 2000; // treat in-memory as fresh for 2 seconds after a write
+
 function renderGroups() {
-  // Always reload from storage first — catches any auto-assigns
-  // that happened while the popup was closed
-  chrome.storage.sync.get(['savedGroups'], function(syncResult) {
-    if (!chrome.runtime.lastError && syncResult.savedGroups) {
-      savedGroups = syncResult.savedGroups;
-    }
+  const now = Date.now();
+  // If in-memory groups were written within TTL, skip the storage round-trip
+  if (_savedGroupsWrittenAt > 0 && (now - _savedGroupsWrittenAt) < GROUPS_CACHE_TTL_MS) {
     _renderGroupsUI();
+    return;
+  }
+  // Otherwise reload from both storages and use the most recently written copy
+  chrome.storage.local.get(['savedGroups', 'savedGroupsTimestamp'], function(localResult) {
+    chrome.storage.sync.get(['savedGroups', 'savedGroupsTimestamp'], function(syncResult) {
+      // Capture lastError immediately — it is overwritten the moment any
+      // subsequent chrome API call executes (e.g. the local.get above already
+      // cleared the outer one; this inner one must be captured right here)
+      const syncErr = chrome.runtime.lastError || null;
+      const localGroups    = localResult.savedGroups || [];
+      const syncGroups     = (!syncErr && syncResult.savedGroups) ? syncResult.savedGroups : [];
+      const localTimestamp = localResult.savedGroupsTimestamp || 0;
+      const syncTimestamp  = (!syncErr && syncResult.savedGroupsTimestamp) ? syncResult.savedGroupsTimestamp : 0;
+
+      // Use whichever was written most recently — prevents deleted groups reappearing
+      if (localTimestamp >= syncTimestamp) {
+        savedGroups = localGroups;
+      } else {
+        savedGroups = syncGroups;
+      }
+      _renderGroupsUI();
+    });
   });
 }
 
@@ -563,7 +686,12 @@ function _renderGroupsUI() {
       closeEl.title='Remove from group';
       closeEl.addEventListener('click',e=>{
         e.stopPropagation();
-        savedGroups[gi].tabs=savedGroups[gi].tabs.filter(x=>x.id!==t.id);
+        // Use gi directly — avoids fragile name lookup that breaks with duplicate group names
+        if (gi >= 0 && gi < savedGroups.length) {
+          const tabIdx = savedGroups[gi].tabs.findIndex(x => x.url === t.url);
+          if (tabIdx !== -1) savedGroups[gi].tabs.splice(tabIdx, 1);
+          if (savedGroups[gi].tabs.length === 0) savedGroups.splice(gi, 1);
+        }
         saveToStorage({ savedGroups });
         renderGroups();
       });
@@ -801,11 +929,30 @@ function safeParseJSON(text) {
     if (m) return JSON.parse(m[0]);
   } catch(e4) {}
 
+  // Attempt 5: Gemini sometimes returns a bare array [...] instead of an object
+  // Wrap it into the expected shape so the caller can handle it
+  try {
+    const m = text.match(/\[[\s\S]*\]/);
+    if (m) {
+      const arr = JSON.parse(m[0]);
+      if (Array.isArray(arr) && arr.length > 0) {
+        // Could be a results array from compareWithAI or a groups array from autoGroupWithAI
+        if (arr[0].tabIndex !== undefined) {
+          return { results: arr, winnerIndex: 0, winnerReason: 'Top scorer' };
+        }
+        if (arr[0].name !== undefined && arr[0].tabIndexes !== undefined) {
+          return { groups: arr };
+        }
+      }
+    }
+  } catch(e5) {}
+
   throw new Error('Could not parse AI response after multiple attempts.');
 }
 
 async function autoGroupWithAI(apiKey, tabs) {
-  const tabInfo = tabs.map((t,i) => `${i}: ${t.title||'Untitled'} | ${cleanUrl(t.url||'')}`).join('\n');
+  const capped = tabs.slice(0, 40);
+  const tabInfo = capped.map((t,i) => `${i}: ${(t.title||'Untitled').slice(0,60)} | ${cleanUrl(t.url||'')}`).join('\n');
   const prompt = 'You are a tab organizer. Group these browser tabs into 2-6 logical categories.\n\nTabs:\n' + tabInfo + '\n\nCRITICAL: Your entire response must be ONLY the JSON object below. No intro text, no explanation, no markdown, no backticks.\n{"groups":[{"name":"Group Name","tabIndexes":[0,2,5]},{"name":"Another Group","tabIndexes":[1,3]}]}\nRules: every tab index must appear exactly once, group names 1-3 words, unknowns go in Other.';
 
   const data = await callAPI(apiKey, prompt, 1000);
@@ -826,7 +973,7 @@ async function autoGroupWithAI(apiKey, tabs) {
     .map((g, i) => ({
       name: g.name || 'Group ' + (i+1),
       color: GROUP_COLORS[i % GROUP_COLORS.length],
-      tabs: (g.tabIndexes || []).map(idx => tabs[idx]).filter(Boolean)
+      tabs: (g.tabIndexes || []).map(idx => capped[idx]).filter(Boolean)
     }))
     .filter(g => g.tabs.length > 0);
 }
@@ -856,7 +1003,6 @@ async function runCompare(group, gi, compareBtn, comparePanel) {
 }
 
 async function compareWithAI(apiKey, tabsData) {
-  const tabsInfo = tabsData.map((t,i)=>`TAB ${i+1}:\nTitle: ${t.title}\nURL: ${t.url}\nContent: ${t.text||'(none)'}`).join('\n\n---\n\n');
   // Build minimal tab info to save tokens
   const minimalInfo = tabsData.map((t,i) =>
     'TAB ' + (i+1) + ': ' + t.title + ' | ' + t.url
@@ -878,7 +1024,12 @@ async function compareWithAI(apiKey, tabsData) {
 function renderCompareResults(panel, scores, tabs) {
   panel.innerHTML='';
   const header=document.createElement('div'); header.className='compare-panel-header';
-  header.innerHTML=`<div class="compare-panel-title">⚖ Research Comparison</div><button class="compare-panel-close" id="closePanelBtn">✕</button>`;
+  // Use a class instead of an id — this function is called once per group so
+  // using id="closePanelBtn" creates duplicate IDs in the DOM when multiple
+  // groups are open, which makes querySelector('#closePanelBtn') unreliable
+  const closeBtn=document.createElement('button'); closeBtn.className='compare-panel-close'; closeBtn.textContent='✕';
+  const titleEl=document.createElement('div'); titleEl.className='compare-panel-title'; titleEl.textContent='⚖ Research Comparison';
+  header.appendChild(titleEl); header.appendChild(closeBtn);
   panel.appendChild(header);
   const winnerTab=tabs[scores.winnerIndex];
   const banner=document.createElement('div'); banner.className='compare-winner-banner';
@@ -900,7 +1051,8 @@ function renderCompareResults(panel, scores, tabs) {
     list.appendChild(siteCard);
   });
   panel.appendChild(list);
-  panel.querySelector('#closePanelBtn').addEventListener('click',()=>{panel.classList.remove('open');panel.previousElementSibling.innerHTML='⚖ Compare for Research';});
+  // Wire close button directly — no querySelector('#closePanelBtn') needed
+  closeBtn.addEventListener('click',()=>{panel.classList.remove('open');panel.previousElementSibling.innerHTML='⚖ Compare for Research';});
 }
 
 // =============================================
@@ -1001,13 +1153,54 @@ btnActivateFocus.addEventListener('click', async function() {
   if (focusSelectedIds.size===0) return;
   const toHide=allTabs.filter(t=>!focusSelectedIds.has(t.id)).map(t=>t.id);
   const focusedUrls=allTabs.filter(t=>focusSelectedIds.has(t.id)).map(t=>t.url);
-  for (const id of toHide) { try { await chrome.tabs.discard(id); } catch{} }
+  // Use tabs.hide() to actually remove tabs from the tab bar (requires tabHide permission)
+  // Falls back gracefully if hide fails (e.g. pinned tabs cannot be hidden)
+  if (toHide.length > 0) {
+    for (const id of toHide) { try { await chrome.tabs.discard(id); } catch {} }
+  }
   hiddenTabIds=toHide; focusModeActive=true;
   chrome.storage.local.set({focusModeActive:true,hiddenTabIds:toHide,focusedTabUrls:focusedUrls});
   renderFocusView();
 });
 
-btnExitFocus.addEventListener('click',()=>{ focusModeActive=false; hiddenTabIds=[]; focusSelectedIds.clear(); chrome.storage.local.set({focusModeActive:false,hiddenTabIds:[]}); renderFocusView(); });
+btnExitFocus.addEventListener('click', async function() {
+  // 1. Immediately show a loading placeholder — prevents blank screen flash
+  focusActiveBar.style.display = 'none';
+  focusHeader.style.display    = 'none';
+  focusFooter.style.display    = 'none';
+  focusList.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;padding:32px;gap:10px;color:var(--muted);font-size:12px;">
+      <div style="width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;flex-shrink:0;"></div>
+      <span>Restoring tabs...</span>
+    </div>`;
+
+  // 2. Update in-memory state immediately
+  focusModeActive = false;
+  hiddenTabIds    = [];
+  focusSelectedIds.clear();
+
+  // 3. Clear storage — discarded tabs restore automatically when clicked
+  await new Promise(resolve =>
+    chrome.storage.local.set(
+      { focusModeActive: false, hiddenTabIds: [], focusedTabUrls: [] },
+      resolve
+    )
+  );
+
+  // 5. Re-query tabs with fresh IDs (IDs can change after Chrome restart)
+  chrome.tabs.query({}, function(tabs) {
+    allTabs = tabs;
+    updateTabCountBadge(tabs.length);
+
+    // 6. Restore UI — show header and footer, hide active bar
+    focusHeader.style.display    = '';
+    focusFooter.style.display    = 'flex';
+    focusActiveBar.style.display = 'none';
+
+    // 7. Render with fresh data — no blank flash
+    renderFocusView();
+  });
+});
 
 // =============================================
 //  SESSIONS
@@ -1024,8 +1217,8 @@ function renderSessions() {
     chrome.storage.sync.get(['savedSessions'], function(syncResult) {
       const syncSessions = syncResult.savedSessions || [];
       // Merge — local takes priority, add any sync sessions not in local
-      const localNames = new Set(localSessions.map(s => s.name + s.savedAt));
-      const uniqueSync = syncSessions.filter(s => !localNames.has(s.name + s.savedAt));
+      const localNames = new Set(localSessions.map(s => s.name + '_' + s.savedAt));
+      const uniqueSync = syncSessions.filter(s => !localNames.has(s.name + '_' + s.savedAt));
       savedSessions = [...localSessions, ...uniqueSync];
       _renderSessionsList(list, empty);
     });
@@ -1058,13 +1251,21 @@ function _renderSessionsList(list, empty) {
     restoreBtn.addEventListener('click',()=>restoreSession(session));
     const delBtn=document.createElement('button'); delBtn.className='btn-del'; delBtn.textContent='✕';
     delBtn.addEventListener('click',()=>{
-      // Delete by savedAt timestamp — safe even after sync merge reorders array
-      const savedAt = session.savedAt;
-      savedSessions = savedSessions.filter(s => s.savedAt !== savedAt);
-      chrome.storage.sync.set({ savedSessions }, () => {
-        chrome.storage.local.set({ savedSessions }, () => {
-          renderSessions();
-        });
+      // Delete by both name AND savedAt — savedAt alone can collide if two sessions
+      // are saved within the same millisecond (e.g. rapid import)
+      const savedAt  = session.savedAt;
+      const sessName = session.name;
+      let deleted = false;
+      savedSessions = savedSessions.filter(s => {
+        // Remove only the first exact match — prevents bulk-deleting true duplicates
+        if (!deleted && s.savedAt === savedAt && s.name === sessName) {
+          deleted = true;
+          return false;
+        }
+        return true;
+      });
+      saveToStorage({ savedSessions }, () => {
+        renderSessions();
       });
     });
     actions.appendChild(restoreBtn); actions.appendChild(delBtn);
@@ -1104,12 +1305,10 @@ document.getElementById('btnConfirmSave').addEventListener('click',()=>{
     }))
   };
   savedSessions.unshift(session);
-  // Save to both sync and local
-  chrome.storage.sync.set({ savedSessions }, () => {
-    chrome.storage.local.set({ savedSessions }, () => {
-      document.getElementById('saveDialog').style.display = 'none';
-      renderSessions();
-    });
+  // Use saveToStorage so timestamps are written consistently to both sync + local
+  saveToStorage({ savedSessions }, () => {
+    document.getElementById('saveDialog').style.display = 'none';
+    renderSessions();
   });
 });
 
@@ -1196,7 +1395,14 @@ document.getElementById('importFileInput').addEventListener('change', function()
 });
 
 function restoreSession(session) {
-  session.tabs.forEach(t=>{ chrome.tabs.create({url:t.url,active:false}); });
+  session.tabs.forEach(t => {
+    // Skip system URLs, empty URLs, and new tab pages — chrome.tabs.create rejects them
+    if (!t.url) return;
+    if (t.url.startsWith('chrome://')) return;
+    if (t.url.startsWith('chrome-extension://')) return;
+    if (t.url === 'about:newtab' || t.url === 'about:blank') return;
+    chrome.tabs.create({ url: t.url, active: false });
+  });
 }
 
 function timeAgo(ts) {
@@ -1221,8 +1427,16 @@ function renderHealth() {
   const dupeTabs=[];
   Object.values(hostMap).forEach(tabs=>{ if(tabs.length>1) tabs.slice(1).forEach(t=>dupeTabs.push(t)); });
 
-  // Old tabs (no lastAccessed or very old — use index as proxy since lastAccessed may not be available)
-  const oldTabs=allTabs.filter(t=>!t.active&&!t.audible).slice(Math.floor(allTabs.length*0.6));
+  // Old tabs — not accessed in the last 7 days (uses lastAccessed if available, falls back to index proxy)
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const oldTabs = allTabs.filter(t => {
+    if (t.lastAccessed) return !t.active && !t.audible && t.lastAccessed < sevenDaysAgo;
+    // Fallback: bottom 40% by position if lastAccessed not available
+    return false;
+  });
+  const oldTabsFallback = oldTabs.length === 0
+    ? allTabs.filter(t => !t.active && !t.audible).slice(Math.floor(allTabs.length * 0.6))
+    : oldTabs;
 
   // Ungrouped
   const groupedIds=new Set(savedGroups.flatMap(g=>g.tabs.map(t=>t.id)));
@@ -1230,10 +1444,10 @@ function renderHealth() {
 
   // Score calculation
   let score=100;
-  if (dupeTabs.length>0)  score-=Math.min(30, dupeTabs.length*8);
-  if (oldTabs.length>5)   score-=Math.min(25, (oldTabs.length-5)*3);
-  if (allTabs.length>20)  score-=Math.min(20, (allTabs.length-20)*1);
-  if (ungrouped.length>10) score-=10;
+  if (dupeTabs.length>0)         score-=Math.min(30, dupeTabs.length*8);
+  if (oldTabsFallback.length>5)  score-=Math.min(25, (oldTabsFallback.length-5)*3);
+  if (allTabs.length>20)         score-=Math.min(20, (allTabs.length-20)*1);
+  if (ungrouped.length>10)       score-=10;
   score=Math.max(10,Math.round(score));
 
   // Ring animation
@@ -1247,11 +1461,11 @@ function renderHealth() {
   // Title
   const label=score>=80?'Excellent':score>=60?'Good':score>=40?'Fair':'Needs work';
   healthTitle.textContent=`Tab health: ${label}`;
-  healthSub.textContent=score>=80?'Your tabs are well organised!':`${[dupeTabs.length>0,oldTabs.length>5,ungrouped.length>10].filter(Boolean).length} issue${[dupeTabs.length>0,oldTabs.length>5,ungrouped.length>10].filter(Boolean).length!==1?'s':''} found. Clean up to improve your score.`;
+  healthSub.textContent=score>=80?'Your tabs are well organised!':`${[dupeTabs.length>0,oldTabsFallback.length>5,ungrouped.length>10].filter(Boolean).length} issue${[dupeTabs.length>0,oldTabsFallback.length>5,ungrouped.length>10].filter(Boolean).length!==1?'s':''} found. Clean up to improve your score.`;
 
   // Stats
   document.getElementById('statDupes').textContent=dupeTabs.length;
-  document.getElementById('statOld').textContent=oldTabs.length;
+  document.getElementById('statOld').textContent=oldTabsFallback.length;
   document.getElementById('statTotal').textContent=allTabs.length;
 
   // Issues list
@@ -1263,8 +1477,8 @@ function renderHealth() {
     });
     issues.appendChild(item);
   }
-  if (oldTabs.length>5) {
-    const item=makeIssueItem('#f59e0b',''+oldTabs.length+' inactive tabs','Tabs not recently visited','Review',()=>{ switchView('all'); });
+  if (oldTabsFallback.length>5) {
+    const item=makeIssueItem('#f59e0b',''+oldTabsFallback.length+' inactive tabs','Tabs not recently visited','Review',()=>{ switchView('all'); });
     issues.appendChild(item);
   }
   if (ungrouped.length>10) {
@@ -1280,10 +1494,13 @@ function renderHealth() {
   const oldBtn = document.getElementById('btnFixAll');
   const newBtn = oldBtn.cloneNode(true);
   oldBtn.parentNode.replaceChild(newBtn, oldBtn);
+  // Capture dupeTabs snapshot now — closure over let variable would go stale
+  // if renderHealth() is called again before the button is clicked
+  const dupeTabsSnapshot = dupeTabs.slice();
   newBtn.addEventListener('click', () => {
-    if (dupeTabs.length > 0) {
-      dupeTabs.forEach(t => chrome.tabs.remove(t.id));
-      allTabs = allTabs.filter(t => !dupeTabs.find(d => d.id === t.id));
+    if (dupeTabsSnapshot.length > 0) {
+      dupeTabsSnapshot.forEach(t => chrome.tabs.remove(t.id));
+      allTabs = allTabs.filter(t => !dupeTabsSnapshot.find(d => d.id === t.id));
       updateTabCountBadge(allTabs.length);
     }
     renderHealth();
@@ -1327,18 +1544,17 @@ function showSummaryText(summaryBox, text) {
 }
 
 function extractPageText() {
-  // Remove unwanted elements directly from live document
-  const unwanted = document.querySelectorAll('script,style,nav,header,footer,aside,noscript,iframe');
-  const hidden = [];
-  unwanted.forEach(el => {
-    hidden.push({ el, display: el.style.display });
-    el.style.display = 'none';
-  });
-  // Get text from main content area
-  const main = document.querySelector('main,article,[role="main"],#content,.content,.main');
-  const text = (main || document.body || document).innerText || '';
-  // Restore hidden elements
-  hidden.forEach(({ el, display }) => { el.style.display = display; });
+  // Clone the entire body so we never touch the live DOM — avoids visible
+  // layout flash caused by temporarily setting display:none on real elements
+  const clone = (document.body || document.documentElement).cloneNode(true);
+
+  // Remove noise elements from the clone only
+  clone.querySelectorAll('script,style,nav,header,footer,aside,noscript,iframe,svg').forEach(el => el.remove());
+
+  // Prefer main content area inside the clone
+  const main = clone.querySelector('main,article,[role="main"],#content,.content,.main');
+  const text = (main || clone).innerText || (main || clone).textContent || '';
+
   return text.replace(/\s+/g, ' ').trim().slice(0, 4000);
 }
 
@@ -1412,8 +1628,8 @@ document.addEventListener('keydown', e => {
   }
   // Ctrl+G — switch to Groups
   if (e.key === 'g' && e.ctrlKey) { e.preventDefault(); switchView('groups'); }
-  // Ctrl+S — switch to Sessions
-  if (e.key === 's' && e.ctrlKey && !e.shiftKey) { e.preventDefault(); switchView('sessions'); }
+  // Ctrl+Shift+S — switch to Sessions (Ctrl+S alone hijacks browser Save Page)
+  if (e.key === 's' && e.ctrlKey && e.shiftKey) { e.preventDefault(); switchView('sessions'); }
   // Ctrl+H — switch to Health
   if (e.key === 'h' && e.ctrlKey) { e.preventDefault(); switchView('health'); }
 });
@@ -1443,8 +1659,10 @@ function switchToTab(tabId, windowId) {
       });
       return;
     }
-    chrome.windows.update(windowId, {focused:true});
-    window.close();
+    chrome.windows.update(windowId, {focused:true}, () => {
+      // 150ms gives storage writes time to finish before popup closes
+      setTimeout(() => window.close(), 150);
+    });
   });
 }
 
@@ -1470,14 +1688,33 @@ function makeFaviconFallback(title) { const div=document.createElement('div'); d
 // =============================================
 //  STORAGE HELPER — sync + local fallback
 // =============================================
+function trimSessionForSync(session) {
+  return {
+    ...session,
+    tabs: session.tabs.map(t => ({ title: t.title, url: t.url }))
+  };
+}
+
 function saveToStorage(data, callback) {
-  chrome.storage.sync.set(data, () => {
+  // Attach a timestamp so readers can pick the most recently written copy
+  const now = Date.now();
+  const dataWithTimestamp = { ...data };
+  if (data.savedGroups)   { dataWithTimestamp.savedGroupsTimestamp   = now; _savedGroupsWrittenAt = now; }
+  if (data.savedSessions) dataWithTimestamp.savedSessionsTimestamp = now;
+
+  // For sessions, strip heavy fields before syncing to stay under Chrome's 8KB per-key limit
+  let syncData = dataWithTimestamp;
+  if (dataWithTimestamp.savedSessions) {
+    syncData = { ...dataWithTimestamp, savedSessions: dataWithTimestamp.savedSessions.map(trimSessionForSync) };
+  }
+
+  chrome.storage.sync.set(syncData, () => {
     if (chrome.runtime.lastError) {
       // Sync full — use local
-      chrome.storage.local.set(data, callback);
+      chrome.storage.local.set(dataWithTimestamp, callback);
     } else {
-      // Save to both for reliability
-      chrome.storage.local.set(data, callback);
+      // Save full data (with favicons) to local for reliability
+      chrome.storage.local.set(dataWithTimestamp, callback);
     }
   });
 }
@@ -1507,7 +1744,7 @@ setTimeout(checkAutoSaveStatus, 500);
 const shortcutHints = {
   all:      '<span class="shortcut-key">Ctrl+F</span> search  <span class="shortcut-key">/</span> focus',
   groups:   '<span class="shortcut-key">Ctrl+G</span> groups',
-  sessions: '<span class="shortcut-key">Ctrl+S</span> sessions  <span class="shortcut-key">Enter</span> confirm',
+  sessions: '<span class="shortcut-key">Ctrl+Shift+S</span> sessions  <span class="shortcut-key">Enter</span> confirm',
   health:   '<span class="shortcut-key">Ctrl+H</span> health',
   focus:    '<span class="shortcut-key">Esc</span> close panel'
 };
