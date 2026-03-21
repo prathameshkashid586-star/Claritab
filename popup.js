@@ -1153,18 +1153,18 @@ btnActivateFocus.addEventListener('click', async function() {
   if (focusSelectedIds.size===0) return;
   const toHide=allTabs.filter(t=>!focusSelectedIds.has(t.id)).map(t=>t.id);
   const focusedUrls=allTabs.filter(t=>focusSelectedIds.has(t.id)).map(t=>t.url);
-  // Use tabs.hide() to actually remove tabs from the tab bar (requires tabHide permission)
-  // Falls back gracefully if hide fails (e.g. pinned tabs cannot be hidden)
-  if (toHide.length > 0) {
-    for (const id of toHide) { try { await chrome.tabs.discard(id); } catch {} }
-  }
+  // Discard non-focused tabs to free memory — no special permission needed
+  for (const id of toHide) { try { await chrome.tabs.discard(id); } catch {} }
   hiddenTabIds=toHide; focusModeActive=true;
   chrome.storage.local.set({focusModeActive:true,hiddenTabIds:toHide,focusedTabUrls:focusedUrls});
   renderFocusView();
 });
 
 btnExitFocus.addEventListener('click', async function() {
-  // 1. Immediately show a loading placeholder — prevents blank screen flash
+  // 1. Snapshot hiddenTabIds BEFORE clearing state
+  const discardedIds = hiddenTabIds.slice();
+
+  // 2. Show loading placeholder
   focusActiveBar.style.display = 'none';
   focusHeader.style.display    = 'none';
   focusFooter.style.display    = 'none';
@@ -1174,12 +1174,18 @@ btnExitFocus.addEventListener('click', async function() {
       <span>Restoring tabs...</span>
     </div>`;
 
-  // 2. Update in-memory state immediately
+  // 3. Clear in-memory state
   focusModeActive = false;
   hiddenTabIds    = [];
   focusSelectedIds.clear();
 
-  // 3. Clear storage — discarded tabs restore automatically when clicked
+  // 4. Reload all discarded tabs so they don't show black screen when switched to
+  //    chrome.tabs.discard() unloads tab content — must reload before user clicks them
+  for (const id of discardedIds) {
+    try { await chrome.tabs.reload(id); } catch {}
+  }
+
+  // 5. Clear storage
   await new Promise(resolve =>
     chrome.storage.local.set(
       { focusModeActive: false, hiddenTabIds: [], focusedTabUrls: [] },
@@ -1187,18 +1193,17 @@ btnExitFocus.addEventListener('click', async function() {
     )
   );
 
-  // 5. Re-query tabs with fresh IDs (IDs can change after Chrome restart)
+  // 6. Re-query tabs with fresh state
   chrome.tabs.query({}, function(tabs) {
     allTabs = tabs;
     updateTabCountBadge(tabs.length);
-
-    // 6. Restore UI — show header and footer, hide active bar
     focusHeader.style.display    = '';
     focusFooter.style.display    = 'flex';
     focusActiveBar.style.display = 'none';
-
-    // 7. Render with fresh data — no blank flash
-    renderFocusView();
+    // Switch to All Tabs view — tabs are reloading in background,
+    // using Chrome's native tab bar is safer than switching via Claritab
+    // while tabs are still loading content
+    switchView('all');
   });
 });
 
@@ -1648,9 +1653,10 @@ clearSearch.addEventListener('click',()=>{ searchInput.value=''; clearSearch.cla
 //  HELPERS
 // =============================================
 function switchToTab(tabId, windowId) {
-  chrome.tabs.update(tabId, {active:true}, () => {
+  // Check if tab is discarded — if so, reload it first to prevent black screen
+  chrome.tabs.get(tabId, function(tab) {
     if (chrome.runtime.lastError) {
-      // Tab ID stale — refresh and try by URL
+      // Tab ID stale — refresh list
       console.warn('Tab not found, refreshing list');
       chrome.tabs.query({}, function(tabs) {
         allTabs = tabs;
@@ -1659,10 +1665,26 @@ function switchToTab(tabId, windowId) {
       });
       return;
     }
-    chrome.windows.update(windowId, {focused:true}, () => {
-      // 150ms gives storage writes time to finish before popup closes
-      setTimeout(() => window.close(), 150);
-    });
+
+    if (tab.discarded) {
+      // Tab was discarded (e.g. by focus mode) — reload it first
+      // then activate once it has content
+      chrome.tabs.reload(tabId, {}, () => {
+        chrome.tabs.update(tabId, {active: true}, () => {
+          chrome.windows.update(windowId, {focused: true}, () => {
+            setTimeout(() => window.close(), 150);
+          });
+        });
+      });
+    } else {
+      // Tab is loaded — switch to it normally
+      chrome.tabs.update(tabId, {active: true}, () => {
+        if (chrome.runtime.lastError) return;
+        chrome.windows.update(windowId, {focused: true}, () => {
+          setTimeout(() => window.close(), 150);
+        });
+      });
+    }
   });
 }
 

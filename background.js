@@ -213,7 +213,8 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
   }
 
   if (provider === 'gemini') {
-    // Model list — all verified available on v1beta generateContent endpoint
+    // Model list ordered by preference — fallback chain if primary is unavailable
+    // Use stable GA names; preview/experimental names change frequently
     const models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite'];
     let lastError = null;
     for (const model of models) {
@@ -231,7 +232,13 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
         );
         if (!response.ok) {
           const e = await response.json().catch(() => ({}));
-          lastError = new Error(e?.error?.message || `Gemini error ${response.status}`);
+          const msg = e?.error?.message || `Gemini error ${response.status}`;
+          // Give a friendly message for quota errors
+          if (response.status === 429 || msg.toLowerCase().includes('quota')) {
+            lastError = new Error('Gemini free quota exceeded. Try again tomorrow or switch to Groq (also free) in Settings.');
+          } else {
+            lastError = new Error(msg);
+          }
           continue;
         }
         const data = await response.json();
