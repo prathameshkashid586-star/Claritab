@@ -1003,22 +1003,36 @@ async function runCompare(group, gi, compareBtn, comparePanel) {
 }
 
 async function compareWithAI(apiKey, tabsData) {
-  // Build minimal tab info to save tokens
+  // Build minimal tab info to save tokens — use 0-based index to match array
   const minimalInfo = tabsData.map((t,i) =>
-    'TAB ' + (i+1) + ': ' + t.title + ' | ' + t.url
+    'TAB ' + i + ': ' + t.title + ' | ' + t.url
   ).join('\n');
 
   const prompt = 'Score these tabs for research quality. Raw JSON only, no markdown.' +
     '\nFormat: {"results":[{"tabIndex":0,"credibility":80,"depth":70,"bias":85,"overallScore":78,"verdict":"5 words max"}],"winnerIndex":0,"winnerReason":"5 words max"}' +
-    '\ncredibility=trust, depth=detail, bias=neutrality(100=neutral), overall=average.' +
+    '\ntabIndex is the TAB number shown above (0-based). credibility=trust, depth=detail, bias=neutrality(100=neutral), overall=average.' +
     '\nKeep verdict under 5 words. Keep winnerReason under 5 words.' +
     '\n\n' + minimalInfo;
   const data = await callAPI(apiKey, prompt, 1000);
   let text = data.content?.[0]?.text?.trim() || '{}';
 
   // Use bulletproof safeParseJSON — handles all providers
-  try { return safeParseJSON(text); }
+  let parsed;
+  try { parsed = safeParseJSON(text); }
   catch(e) { throw new Error('AI returned invalid JSON for comparison. Please try again.'); }
+
+  // Normalise tabIndex — some providers return 1-based even when asked for 0-based
+  // Detect by checking if any tabIndex >= tabsData.length (impossible for 0-based)
+  if (parsed.results && Array.isArray(parsed.results)) {
+    const maxIdx = Math.max(...parsed.results.map(r => r.tabIndex || 0));
+    if (maxIdx >= tabsData.length) {
+      // Provider used 1-based — shift all indexes down by 1
+      parsed.results = parsed.results.map(r => ({ ...r, tabIndex: (r.tabIndex || 1) - 1 }));
+      if (parsed.winnerIndex >= 1) parsed.winnerIndex = parsed.winnerIndex - 1;
+    }
+  }
+
+  return parsed;
 }
 
 function renderCompareResults(panel, scores, tabs) {
@@ -1031,14 +1045,14 @@ function renderCompareResults(panel, scores, tabs) {
   const titleEl=document.createElement('div'); titleEl.className='compare-panel-title'; titleEl.textContent='⚖ Research Comparison';
   header.appendChild(titleEl); header.appendChild(closeBtn);
   panel.appendChild(header);
-  const winnerTab=tabs[scores.winnerIndex];
+  const winnerTab = tabs[scores.winnerIndex] || tabs[0];
   const banner=document.createElement('div'); banner.className='compare-winner-banner';
-  banner.innerHTML=`<span style="font-size:16px">🏆</span><span class="compare-winner-text"><strong>Best:</strong> ${escapeHtml(winnerTab?.title||'Unknown')} — ${escapeHtml(scores.winnerReason||'')}</span>`;
+  banner.innerHTML=`<span style="font-size:16px">🏆</span><span class="compare-winner-text"><strong>Best:</strong> ${escapeHtml(winnerTab?.title||'Top Result')} — ${escapeHtml(scores.winnerReason||'Highest overall score')}</span>`;
   panel.appendChild(banner);
   const list=document.createElement('div'); list.className='compare-results-list';
   const sorted=[...scores.results].sort((a,b)=>b.overallScore-a.overallScore);
   sorted.forEach((r,rankIdx)=>{
-    const tab=tabs[r.tabIndex]; const isWinner=r.tabIndex===scores.winnerIndex;
+    const tab=tabs[r.tabIndex] || tabs[rankIdx]; const isWinner=r.tabIndex===scores.winnerIndex;
     const rankClass=rankIdx===0?'rank-1':rankIdx===1?'rank-2':rankIdx===2?'rank-3':'rank-other';
     const siteCard=document.createElement('div'); siteCard.className='compare-site-card'+(isWinner?' winner':'');
     siteCard.innerHTML=`<div class="compare-site-top"><div class="compare-site-rank ${rankClass}">${rankIdx+1}</div><span class="compare-site-name" title="${escapeHtml(tab?.title||'')}">${escapeHtml(tab?.title||'Untitled')}</span><span class="compare-site-score">${r.overallScore}/100</span></div>

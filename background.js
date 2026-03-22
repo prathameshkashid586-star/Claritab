@@ -206,7 +206,10 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
     });
     if (!response.ok) {
       const e = await response.json().catch(() => ({}));
-      throw new Error(e?.error?.message || `Claude API error ${response.status}`);
+      const msg = e?.error?.message || `Claude API error ${response.status}`;
+      if (response.status === 429) throw new Error('Claude rate limit reached. Wait a moment and try again.');
+      if (response.status === 401) throw new Error('Claude API key is invalid. Please check your key in Settings.');
+      throw new Error(msg);
     }
     const data = await response.json();
     return data.content?.[0]?.text || '';
@@ -265,7 +268,10 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
     });
     if (!response.ok) {
       const e = await response.json().catch(() => ({}));
-      throw new Error(e?.error?.message || `OpenAI error ${response.status}`);
+      const msg = e?.error?.message || `OpenAI error ${response.status}`;
+      if (response.status === 429) throw new Error('OpenAI rate limit or quota exceeded. Check your billing at platform.openai.com.');
+      if (response.status === 401) throw new Error('OpenAI API key is invalid. Please check your key in Settings.');
+      throw new Error(msg);
     }
     const data = await response.json();
     return data.choices?.[0]?.message?.content || '';
@@ -286,7 +292,10 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
     });
     if (!response.ok) {
       const e = await response.json().catch(() => ({}));
-      throw new Error(e?.error?.message || `Groq error ${response.status}`);
+      const msg = e?.error?.message || `Groq error ${response.status}`;
+      if (response.status === 429) throw new Error('Groq rate limit reached. Wait a moment and try again.');
+      if (response.status === 401) throw new Error('Groq API key is invalid. Please check your key in Settings.');
+      throw new Error(msg);
     }
     const data = await response.json();
     return data.choices?.[0]?.message?.content || '';
