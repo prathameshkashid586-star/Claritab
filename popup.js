@@ -1379,26 +1379,31 @@ document.getElementById('importFileInput').addEventListener('change', function()
       const valid = imported.every(s => s.name && Array.isArray(s.tabs));
       if (!valid) throw new Error('File does not look like a Claritab sessions file');
 
-      // Check duplicates by name+savedAt (not name alone)
-      const existingKeys = new Set(savedSessions.map(s => s.name + '_' + s.savedAt));
-      const newSessions = imported.filter(s => !existingKeys.has(s.name + '_' + s.savedAt));
-      const dupeCount = imported.length - newSessions.length;
+      // Always read fresh from local storage before checking duplicates
+      // — in-memory savedSessions may be stale
+      chrome.storage.local.get(['savedSessions'], function(r) {
+        const currentSessions = r.savedSessions || savedSessions;
 
-      if (newSessions.length === 0) {
-        // All duplicates — ask user if they want to import anyway
-        status.textContent = '\u26a0 All sessions already imported. Rename sessions before re-importing.';
-        status.className = 'api-status error';
-        return;
-      }
+        // Deduplicate by name+savedAt — exact same session already present
+        const existingKeys = new Set(currentSessions.map(s => s.name + '_' + s.savedAt));
+        const newSessions = imported.filter(s => !existingKeys.has(s.name + '_' + s.savedAt));
+        const dupeCount = imported.length - newSessions.length;
 
-      savedSessions = [...newSessions, ...savedSessions];
-      saveToStorage({ savedSessions }, () => {
-        renderSessions();
-        let msg = '\u2713 Imported ' + newSessions.length + ' session' + (newSessions.length !== 1 ? 's' : '');
-        if (dupeCount > 0) msg += ' (' + dupeCount + ' duplicate' + (dupeCount !== 1 ? 's' : '') + ' skipped)';
-        status.textContent = msg;
-        status.className = 'api-status success';
-        setTimeout(() => { status.textContent = ''; }, 3000);
+        if (newSessions.length === 0) {
+          status.textContent = '\u26a0 All ' + dupeCount + ' session' + (dupeCount !== 1 ? 's' : '') + ' already exist — nothing new to import.';
+          status.className = 'api-status error';
+          return;
+        }
+
+        savedSessions = [...newSessions, ...currentSessions];
+        saveToStorage({ savedSessions }, () => {
+          renderSessions();
+          let msg = '\u2713 Imported ' + newSessions.length + ' session' + (newSessions.length !== 1 ? 's' : '');
+          if (dupeCount > 0) msg += ' (' + dupeCount + ' duplicate' + (dupeCount !== 1 ? 's' : '') + ' skipped)';
+          status.textContent = msg;
+          status.className = 'api-status success';
+          setTimeout(() => { status.textContent = ''; }, 3000);
+        });
       });
     } catch(err) {
       status.textContent = '\u2717 ' + (err.message || 'Could not read file');
