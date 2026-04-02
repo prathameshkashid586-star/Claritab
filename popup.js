@@ -199,17 +199,27 @@ function syncCurrentView() {
 
 // Tab removed — sync ALL features
 chrome.tabs.onRemoved.addListener(function(tabId) {
+  // Find the URL of the closed tab BEFORE removing it from allTabs
+  const closedTab = allTabs.find(t => t.id === tabId);
+  const closedUrl = closedTab ? closedTab.url : null;
+
   allTabs = allTabs.filter(t => t.id !== tabId);
   updateTabCountBadge(allTabs.length);
 
-  // Sync groups — remove tab from any group it belongs to
+  // Sync groups — remove by ID first, then by URL as fallback
+  // (IDs can go stale after browser restart, URLs are reliable)
   let groupsChanged = false;
   savedGroups = savedGroups.map(g => {
     const before = g.tabs.length;
-    g.tabs = g.tabs.filter(t => t.id !== tabId);
+    g.tabs = g.tabs.filter(t => {
+      if (t.id === tabId) return false;                    // matched by ID
+      if (closedUrl && t.url === closedUrl) return false;  // matched by URL fallback
+      return true;
+    });
     if (g.tabs.length !== before) groupsChanged = true;
     return g;
   }).filter(g => g.tabs && g.tabs.length > 0);
+
   if (groupsChanged) saveToStorage({ savedGroups });
 
   // Re-render current view — handles all views including focus

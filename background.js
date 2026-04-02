@@ -207,18 +207,19 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
     if (!response.ok) {
       const e = await response.json().catch(() => ({}));
       const msg = e?.error?.message || `Claude API error ${response.status}`;
-      if (response.status === 429) throw new Error('Claude rate limit reached. Wait a moment and try again.');
       if (response.status === 401) throw new Error('Claude API key is invalid. Please check your key in Settings.');
-      throw new Error(msg);
+      if (response.status === 403) throw new Error('Claude API key does not have access. Please check your key in Settings.');
+      if (response.status === 429) throw new Error('Claude rate limit reached. Wait a moment and try again.');
+      throw new Error('Claude error: ' + msg);
     }
     const data = await response.json();
     return data.content?.[0]?.text || '';
   }
 
   if (provider === 'gemini') {
-    // Model list ordered by preference — fallback chain if primary is unavailable
-    // Use stable GA names; preview/experimental names change frequently
-    const models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite'];
+    // Model list — try newer models first, fall back to older ones
+    // gemini-2.0-flash shuts down June 1 2026, gemini-2.5-flash-lite is the new free model
+    const models = ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-1.5-flash'];
     let lastError = null;
     for (const model of models) {
       try {
@@ -236,21 +237,32 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
         if (!response.ok) {
           const e = await response.json().catch(() => ({}));
           const msg = e?.error?.message || `Gemini error ${response.status}`;
-          // Give a friendly message for quota errors
+          // Auth errors — throw immediately, no point trying other models
+          if (response.status === 400) {
+            throw new Error('Gemini key error. Make sure your key is from aistudio.google.com and Gemini API is enabled in your Google Cloud project.');
+          }
+          if (response.status === 401 || response.status === 403) {
+            throw new Error('Gemini API key is invalid or has no access. Get a free key at aistudio.google.com');
+          }
           if (response.status === 429 || msg.toLowerCase().includes('quota')) {
-            lastError = new Error('Gemini free quota exceeded. Try again tomorrow or switch to Groq (also free) in Settings.');
+            // Try next model before giving up — each model has its own quota pool
+            lastError = new Error('Gemini rate limit reached. Try switching to Groq in Settings — it is also free and has no such limits.');
           } else {
-            lastError = new Error(msg);
+            lastError = new Error('Gemini error: ' + msg);
           }
           continue;
         }
         const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        console.log('[Claritab Debug] Gemini raw response:', JSON.stringify(text).slice(0, 500));
-        if (text) return text;
-      } catch(e) { lastError = e; continue; }
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+        return text;
+      } catch(e) {
+        // Re-throw immediately for auth errors — no point trying other models
+        if (e.message && (e.message.includes('invalid') || e.message.includes('no access') || e.message.includes('aistudio'))) throw e;
+        lastError = e;
+        continue;
+      }
     }
-    throw lastError || new Error('Gemini: all models failed');
+    throw lastError || new Error('Gemini: all models failed. Switch to Groq in Settings — it is free and works without these limits.');
   }
 
   if (provider === 'openai') {
@@ -269,9 +281,10 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
     if (!response.ok) {
       const e = await response.json().catch(() => ({}));
       const msg = e?.error?.message || `OpenAI error ${response.status}`;
-      if (response.status === 429) throw new Error('OpenAI rate limit or quota exceeded. Check your billing at platform.openai.com.');
       if (response.status === 401) throw new Error('OpenAI API key is invalid. Please check your key in Settings.');
-      throw new Error(msg);
+      if (response.status === 403) throw new Error('OpenAI API key does not have access. Check your plan at platform.openai.com.');
+      if (response.status === 429) throw new Error('OpenAI rate limit or quota exceeded. Check your billing at platform.openai.com.');
+      throw new Error('OpenAI error: ' + msg);
     }
     const data = await response.json();
     return data.choices?.[0]?.message?.content || '';
@@ -293,9 +306,10 @@ async function handleAPICall(apiKey, provider, prompt, maxTokens) {
     if (!response.ok) {
       const e = await response.json().catch(() => ({}));
       const msg = e?.error?.message || `Groq error ${response.status}`;
-      if (response.status === 429) throw new Error('Groq rate limit reached. Wait a moment and try again.');
       if (response.status === 401) throw new Error('Groq API key is invalid. Please check your key in Settings.');
-      throw new Error(msg);
+      if (response.status === 403) throw new Error('Groq API key does not have access. Please check your key in Settings.');
+      if (response.status === 429) throw new Error('Groq rate limit reached. Wait a moment and try again.');
+      throw new Error('Groq error: ' + msg);
     }
     const data = await response.json();
     return data.choices?.[0]?.message?.content || '';

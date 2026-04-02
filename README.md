@@ -4,7 +4,7 @@
 
 ### AI-powered Chrome Extension for smarter tab management and research
 
-![Version](https://img.shields.io/badge/version-4.0.0-5b8fff?style=flat-square)
+![Version](https://img.shields.io/badge/version-4.0.2-5b8fff?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-4ade80?style=flat-square)
 ![Chrome](https://img.shields.io/badge/Chrome-Extension-f59e0b?style=flat-square)
 ![AI](https://img.shields.io/badge/AI-Claude%20%7C%20Gemini%20%7C%20GPT%20%7C%20Groq-a78bfa?style=flat-square)
@@ -12,7 +12,7 @@
 
 **Built by a CS student from Pune 🇮🇳 who got tired of having 30 tabs open with no idea which source to trust.**
 
-[Install from Chrome Web Store](#) · [Report a Bug](../../issues) · [Request a Feature](../../issues)
+[Install from Chrome Web Store](https://chromewebstore.google.com/detail/ohoipbbmkecgcjpgeclpdlgdoiojcicp) · [Report a Bug](../../issues) · [Request a Feature](../../issues)
 
 </div>
 
@@ -55,21 +55,21 @@ It reads your tabs, groups them by topic, scores them for research quality, and 
 ### 🔑 Multi AI Provider
 Choose your preferred AI — no lock-in:
 
-| Provider | Key Format | Cost |
-|----------|-----------|------|
-| Claude (Anthropic) | `sk-ant-...` | $5 free credits |
-| Gemini (Google) | `AIzaSy...` | **Free forever** ✅ |
-| GPT-4o (OpenAI) | `sk-...` | $5 free credits |
-| Groq | `gsk_...` | **Free tier** ✅ |
+| Provider | Model | Key Format | Cost |
+|----------|-------|-----------|------|
+| Groq | llama-3.1-8b-instant | `gsk_...` | **Free tier** ✅ |
+| Gemini (Google) | gemini-2.5-flash-lite | `AIzaSy...` | **Free forever** ✅ |
+| Claude (Anthropic) | claude-haiku | `sk-ant-...` | $5 free credits |
+| GPT-4o (OpenAI) | gpt-4o-mini | `sk-...` | $5 free credits |
 
-> 💡 **Recommended for students:** Use Gemini — completely free, no credit card needed.
+> 💡 **Recommended for students:** Use **Groq** — completely free, no credit card needed, no rate limit issues. Get your key at [console.groq.com](https://console.groq.com)
 
 ---
 
 ## 🚀 Installation
 
-### From Chrome Web Store
-*(Coming soon)*
+### From Chrome Web Store ✅ Live
+[👉 Install Claritab](https://chromewebstore.google.com/detail/ohoipbbmkecgcjpgeclpdlgdoiojcicp)
 
 ### Manual Installation (Developer Mode)
 1. Download or clone this repository
@@ -90,7 +90,7 @@ git clone https://github.com/prathameshkashid586-star/claritab.git
 3. Paste your API key → click **Save**
 4. Start exploring your tabs with AI!
 
-> Get a **free Gemini API key** at [aistudio.google.com](https://aistudio.google.com) — no credit card required.
+> Get a **free Groq API key** at [console.groq.com](https://console.groq.com) — no credit card required, no rate limits for normal use.
 
 ---
 
@@ -131,8 +131,8 @@ claritab/
 ├── manifest.json       ← Extension config (Manifest V3)
 ├── popup.html          ← UI structure
 ├── popup.css           ← Styling
-├── popup.js            ← All popup functionality (~1600 lines)
-├── background.js       ← Auto-save + device sync service worker
+├── popup.js            ← All popup functionality (~1900 lines)
+├── background.js       ← Auto-save + device sync + AI API calls
 ├── icons/
 │   ├── icon16.png
 │   ├── icon48.png
@@ -155,9 +155,30 @@ claritab/
 
 ---
 
+## 📋 Changelog
+
+### v4.0.2 (Latest)
+- 🐛 Fixed Gemini false "quota exceeded" error — updated to gemini-2.5-flash-lite model
+- 🐛 Fixed closed tabs not being removed from groups after browser restart
+- 🐛 Added proper 400/401/403 error messages for all AI providers
+- 🐛 Fixed Groq and OpenAI error ordering
+
+### v4.0.1
+- 🐛 Fixed tab removal from groups using URL fallback matching
+- 🐛 Fixed Gemini empty response causing false quota error
+
+### v4.0.0
+- 🎉 Initial public release
+- ✨ AI Auto-Grouping, Research Comparator, Focus Mode, Session Save
+- ✨ Multi-provider AI support (Claude, Gemini, GPT-4o, Groq)
+- ✨ Tab Health Score, onboarding flow, device sync
+
+---
+
 ## 🗺️ Roadmap
 
-- [ ] Chrome Web Store listing
+- [x] Chrome Web Store listing ✅
+- [ ] Tab Collapse — collapse all tabs into a list, restore individually (coming in v4.1)
 - [ ] Tab grouping with Chrome's native tab groups API
 - [ ] Export research comparison as PDF
 - [ ] Scheduled focus sessions with timer
